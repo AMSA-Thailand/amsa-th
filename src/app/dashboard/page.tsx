@@ -53,6 +53,7 @@ type Partner = {
   id: number;
   name: string;
   logo_url: string;
+  link: string | null;
   created_at?: string;
 };
 
@@ -382,7 +383,7 @@ export default function Dashboard() {
                     image={p.logo_url}
                     icon={<Handshake size={32} />}
                     title={p.name}
-                    subtitle=""
+                    subtitle={p.link ?? ""}
                     onEdit={() => setEditingPartner(p)}
                     onDelete={() => deletePartner(p.id)}
                   />
@@ -818,6 +819,7 @@ function PartnerForm({
   const [form, setForm] = useState<Omit<Partner, "id" | "created_at">>({
     name: initial.name ?? "",
     logo_url: initial.logo_url ?? "",
+    link: initial.link ?? "",
   });
   const set = (k: keyof typeof form, v: string) => setForm(f => ({ ...f, [k]: v }));
   const submit = useSubmit(form, onSave);
@@ -834,6 +836,9 @@ function PartnerForm({
         bucket="partner-logos"
         onUploading={submit.onUploading}
       />
+      <Field label="Website Link">
+        <input type="url" value={form.link ?? ""} onChange={e => set("link", e.target.value)} className={inputCls} placeholder="https://" />
+      </Field>
       <FormFooter onCancel={onCancel} saveLabel="Save Partner" busy={submit.busy} saving={submit.saving} />
     </form>
   );
