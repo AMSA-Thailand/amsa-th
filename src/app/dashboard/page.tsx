@@ -332,7 +332,6 @@ export default function Dashboard() {
                     badgeColor={event.status === "New" ? "green" : "amber"}
                     meta={
                       event.year !== PUBLIC_EVENT_YEAR ? `${event.year} · ไม่แสดงบนเว็บ (ปีไม่ตรง ${PUBLIC_EVENT_YEAR})`
-                      : !event.status ? `${event.year} · ซ่อนอยู่ (ไม่มี Status)`
                       : event.year
                     }
                     title={event.name_en}
@@ -662,7 +661,7 @@ function EventForm({
   onCancel: () => void;
 }) {
   const [form, setForm] = useState<Omit<Event, "id" | "created_at">>({
-    // New events default to "New" so they show up on the homepage
+    // New events get the "New" badge by default
     status: initial.id ? (initial.status ?? "") : "New",
     name_th: initial.name_th ?? "",
     name_en: initial.name_en ?? "",
@@ -678,10 +677,10 @@ function EventForm({
   return (
     <form onSubmit={submit.onSubmit} className="p-8 space-y-6">
       <div className="grid grid-cols-2 gap-6">
-        <Field label="Status">
+        <Field label="Badge (ป้ายบนการ์ด)">
           <select value={form.status ?? ""} onChange={e => set("status", e.target.value)} className={inputCls}>
-            <option value="New">New (แสดงบนเว็บ)</option>
-            <option value="">— ไม่มี — (ซ่อน ไม่แสดงบนเว็บ)</option>
+            <option value="New">New</option>
+            <option value="">— ไม่มีป้าย —</option>
             {/* Keep any legacy value so opening the form doesn't silently change it */}
             {form.status && form.status !== "New" && <option value={form.status}>{form.status}</option>}
           </select>

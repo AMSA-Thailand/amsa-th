@@ -126,21 +126,20 @@ export default function Event() {
           })}
         </div> */}
         <div className="bg-white px-10 pb-20 grid max-sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {/* Homepage: latest 6 events. /event: all events. */}
           {(isEventPage ? events : events.slice(0, 6)).map((item) => {
             const name = lang === "th" ? item.name_th : item.name_en;
             const text = lang === "th" ? item.text_th : item.text_en;
 
             return (
-              item.status && (
-                <EventCard
-                  key={item.id}
-                  status={item.status}
-                  name={name}
-                  link={item.link}
-                  text={text}
-                  image={item.image}
-                />
-              )
+              <EventCard
+                key={item.id}
+                status={item.status}
+                name={name}
+                link={item.link}
+                text={text}
+                image={item.image}
+              />
             );
           })}
         </div>

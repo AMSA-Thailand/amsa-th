@@ -39,9 +39,11 @@ export default function EventCard({
                     className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
                     referrerPolicy="no-referrer"
                   />
-                  <div className="absolute bottom-4 left-4">
-                    <span className="bg-white/90 backdrop-blur-sm text-amsa-blue text-xs font-bold px-3 py-1 rounded-full">{status}</span>
-                  </div>
+                  {status?.trim() && (
+                    <div className="absolute bottom-4 left-4">
+                      <span className="bg-white/90 backdrop-blur-sm text-amsa-blue text-xs font-bold px-3 py-1 rounded-full">{status}</span>
+                    </div>
+                  )}
                 </div>
                 <div className="p-6">
                   <div className="text-sm text-slate-400 mb-2">2025-2026</div>
