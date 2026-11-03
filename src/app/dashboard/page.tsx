@@ -53,10 +53,14 @@ type Partner = {
   id: number;
   name: string;
   logo_url: string;
+  link: string | null;
   created_at?: string;
 };
 
 type ActiveTab = "events" | "articles" | "teams" | "partners";
+
+/** The public site (NewEvent.tsx / Event.tsx) only fetches events with this exact year. */
+const PUBLIC_EVENT_YEAR = "2025 - 2026";
 
 /* ---------- IMAGE UPLOAD FIELDS ---------- */
 const CONTENT_IMAGE_FIELDS = ["img_head"];
@@ -107,90 +111,118 @@ export default function Dashboard() {
   /* ---------- FETCH DATA ---------- */
   useEffect(() => {
     if (!user) return;
-    supabase.from("contents").select("*").order("id").then(({ data }) => { if (data) setContents(data); });
-    supabase.from("events").select("*").order("id").then(({ data }) => { if (data) setEvents(data); });
-    supabase.from("teams").select("*").order("order_num", { ascending: true }).then(({ data }) => { if (data) setTeams(data); });
-    supabase.from("partners").select("*").order("id", { ascending: true }).then(({ data }) => { if (data) setPartners(data); });
+    const load = async <T,>(table: string, orderCol: string, setter: (rows: T[]) => void, ascending = true) => {
+      const { data, error } = await supabase.from(table).select("*").order(orderCol, { ascending });
+      if (error) alert(`โหลดข้อมูล ${table} ไม่สำเร็จ: ${error.message}`);
+      else if (data) setter(data as T[]);
+    };
+    // Same order as the public site: newest first
+    load<Content>("contents", "created_at", setContents, false);
+    load<Event>("events", "id", setEvents, false);
+    load<Team>("teams", "order_num", setTeams);
+    load<Partner>("partners", "id", setPartners);
   }, [user]);
+
+  /* ---------- GENERIC CRUD ---------- */
+
+  /**
+   * Insert or update a row and return the row as stored in the DB.
+   * Supabase returns no error when RLS silently blocks an update/delete,
+   * so we always `.select()` and treat "0 rows affected" as a failure.
+   */
+  const saveRow = async <T extends { id: number }>(
+    table: string,
+    id: number | undefined,
+    form: Record<string, unknown>,
+  ): Promise<T | null> => {
+    const query = id
+      ? supabase.from(table).update(form).eq("id", id).select()
+      : supabase.from(table).insert(form).select();
+    const { data, error } = await query;
+    if (error) { alert(`บันทึกไม่สำเร็จ: ${error.message}`); return null; }
+    if (!data || data.length === 0) {
+      alert("บันทึกไม่สำเร็จ: ไม่มีข้อมูลถูกเปลี่ยนแปลง (อาจไม่มีสิทธิ์ หรือข้อมูลถูกลบไปแล้ว)");
+      return null;
+    }
+    return data[0] as T;
+  };
+
+  const deleteRow = async (table: string, id: number): Promise<boolean> => {
+    const { data, error } = await supabase.from(table).delete().eq("id", id).select("id");
+    if (error) { alert(`ลบไม่สำเร็จ: ${error.message}`); return false; }
+    if (!data || data.length === 0) {
+      alert("ลบไม่สำเร็จ: ไม่มีข้อมูลถูกลบ (อาจไม่มีสิทธิ์ หรือข้อมูลถูกลบไปแล้ว)");
+      return false;
+    }
+    return true;
+  };
+
+  /** Replace-or-append a saved row in local state. */
+  const upsertLocal = <T extends { id: number }>(list: T[], row: T, prepend = false) =>
+    list.some(i => i.id === row.id)
+      ? list.map(i => (i.id === row.id ? row : i))
+      : prepend ? [row, ...list] : [...list, row];
+
+  const byOrder = (a: Team, b: Team) => a.order_num - b.order_num || a.id - b.id;
 
   /* ---------- CONTENT HANDLERS ---------- */
 
   const handleSaveContent = async (form: Omit<Content, "id" | "created_at">) => {
-    if (!form.head) return alert("Headline is required");
-    if (editingContent?.id) {
-      await supabase.from("contents").update(form).eq("id", editingContent.id);
-      setContents(prev => prev.map(i => i.id === editingContent.id ? { ...i, ...form } : i));
-    } else {
-      const { data } = await supabase.from("contents").insert(form).select().single();
-      if (data) setContents(prev => [...prev, data]);
-    }
+    if (!form.head.trim()) { alert("Headline is required"); return; }
+    const row = await saveRow<Content>("contents", editingContent?.id, form);
+    if (!row) return;
+    setContents(prev => upsertLocal(prev, row, true));
     setEditingContent(null);
   };
 
   const deleteContent = async (id: number) => {
     if (!confirm("ลบ content นี้?")) return;
-    await supabase.from("contents").delete().eq("id", id);
-    setContents(prev => prev.filter(i => i.id !== id));
+    if (await deleteRow("contents", id)) setContents(prev => prev.filter(i => i.id !== id));
   };
 
   /* ---------- EVENT HANDLERS ---------- */
 
   const handleSaveEvent = async (form: Omit<Event, "id" | "created_at">) => {
-    if (!form.name_en || !form.year) return alert("Required fields missing");
-    if (editingEvent?.id) {
-      await supabase.from("events").update(form).eq("id", editingEvent.id);
-      setEvents(prev => prev.map(i => i.id === editingEvent.id ? { ...i, ...form } : i));
-    } else {
-      const { data } = await supabase.from("events").insert(form).select().single();
-      if (data) setEvents(prev => [...prev, data]);
-    }
+    if (!form.name_en.trim() || !form.year.trim()) { alert("Required fields missing"); return; }
+    const row = await saveRow<Event>("events", editingEvent?.id, form);
+    if (!row) return;
+    setEvents(prev => upsertLocal(prev, row, true));
     setEditingEvent(null);
   };
 
   const deleteEvent = async (id: number) => {
     if (!confirm("ลบ event นี้?")) return;
-    await supabase.from("events").delete().eq("id", id);
-    setEvents(prev => prev.filter(i => i.id !== id));
+    if (await deleteRow("events", id)) setEvents(prev => prev.filter(i => i.id !== id));
   };
 
   /* ---------- TEAM HANDLERS ---------- */
 
   const handleSaveTeam = async (form: Omit<Team, "id" | "created_at">) => {
-    if (!form.name_en || !form.name_th) return alert("Required fields missing");
-    if (editingTeam?.id) {
-      await supabase.from("teams").update(form).eq("id", editingTeam.id);
-      setTeams(prev => prev.map(i => i.id === editingTeam.id ? { ...i, ...form } : i));
-    } else {
-      const { data } = await supabase.from("teams").insert([form]).select().single();
-      if (data) setTeams(prev => [...prev, data]);
-    }
+    if (!form.name_en.trim() || !form.name_th.trim()) { alert("Required fields missing"); return; }
+    const row = await saveRow<Team>("teams", editingTeam?.id, form);
+    if (!row) return;
+    setTeams(prev => upsertLocal(prev, row).sort(byOrder));
     setEditingTeam(null);
   };
 
   const deleteTeam = async (id: number) => {
     if (!confirm("ลบ team นี้?")) return;
-    await supabase.from("teams").delete().eq("id", id);
-    setTeams(prev => prev.filter(i => i.id !== id));
+    if (await deleteRow("teams", id)) setTeams(prev => prev.filter(i => i.id !== id));
   };
 
   /* ---------- PARTNER HANDLERS ---------- */
 
   const handleSavePartner = async (form: Omit<Partner, "id" | "created_at">) => {
-    if (!form.name || !form.logo_url) return alert("กรุณาใส่ชื่อและอัปโหลดโลโก้");
-    if (editingPartner?.id) {
-      await supabase.from("partners").update(form).eq("id", editingPartner.id);
-      setPartners(prev => prev.map(p => p.id === editingPartner.id ? { ...p, ...form } : p));
-    } else {
-      const { data } = await supabase.from("partners").insert(form).select().single();
-      if (data) setPartners(prev => [...prev, data]);
-    }
+    if (!form.name.trim() || !form.logo_url) { alert("กรุณาใส่ชื่อและอัปโหลดโลโก้"); return; }
+    const row = await saveRow<Partner>("partners", editingPartner?.id, form);
+    if (!row) return;
+    setPartners(prev => upsertLocal(prev, row));
     setEditingPartner(null);
   };
 
   const deletePartner = async (id: number) => {
     if (!confirm("ลบ Partner นี้?")) return;
-    await supabase.from("partners").delete().eq("id", id);
-    setPartners(prev => prev.filter(p => p.id !== id));
+    if (await deleteRow("partners", id)) setPartners(prev => prev.filter(p => p.id !== id));
   };
 
   /* ---------- HELPERS ---------- */
@@ -297,8 +329,11 @@ export default function Dashboard() {
                     image={event.image}
                     icon={<Calendar size={32} />}
                     badge={event.status}
-                    badgeColor={event.status === "Active" ? "green" : "amber"}
-                    meta={event.year}
+                    badgeColor={event.status === "New" ? "green" : "amber"}
+                    meta={
+                      event.year !== PUBLIC_EVENT_YEAR ? `${event.year} · ไม่แสดงบนเว็บ (ปีไม่ตรง ${PUBLIC_EVENT_YEAR})`
+                      : event.year
+                    }
                     title={event.name_en}
                     subtitle={event.text_en ?? ""}
                     onEdit={() => setEditingEvent(event)}
@@ -317,9 +352,9 @@ export default function Dashboard() {
                     key={article.id}
                     image={article.img_head}
                     icon={<FileText size={32} />}
-                    meta={article.author ?? ""}
+                    meta={new Date(article.created_at).toLocaleDateString()}
                     title={article.head}
-                    subtitle={article.detail ?? ""}
+                    subtitle={article.detail || article.author || ""}
                     onEdit={() => setEditingContent(article)}
                     onDelete={() => deleteContent(article.id)}
                   />
@@ -357,7 +392,7 @@ export default function Dashboard() {
                     image={p.logo_url}
                     icon={<Handshake size={32} />}
                     title={p.name}
-                    subtitle=""
+                    subtitle={p.link ?? ""}
                     onEdit={() => setEditingPartner(p)}
                     onDelete={() => deletePartner(p.id)}
                   />
@@ -538,11 +573,13 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function FormFooter({ onCancel, saveLabel = "Save" }: { onCancel: () => void; saveLabel?: string }) {
+function FormFooter({
+  onCancel, saveLabel = "Save", busy = false, saving = false,
+}: { onCancel: () => void; saveLabel?: string; busy?: boolean; saving?: boolean }) {
   return (
     <div className="flex gap-4 pt-4 sticky bottom-0 bg-white pb-2 border-t border-slate-100 px-8">
-      <button type="submit" className="flex-grow bg-amsa-blue text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-2 hover:opacity-90 transition-all">
-        <Save size={20} /> {saveLabel}
+      <button type="submit" disabled={busy} className="flex-grow bg-amsa-blue text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-2 hover:opacity-90 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+        <Save size={20} /> {saving ? "Saving..." : busy ? "Uploading..." : saveLabel}
       </button>
       <button type="button" onClick={onCancel} className="px-8 py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-all">
         Cancel
@@ -553,21 +590,27 @@ function FormFooter({ onCancel, saveLabel = "Save" }: { onCancel: () => void; sa
 
 /** Image upload field with preview */
 function ImageUploadField({
-  label, value, onChange, bucket,
+  label, value, onChange, bucket, onUploading,
 }: {
   label: string;
   value: string;
   onChange: (url: string) => void;
   bucket: string;
+  onUploading?: (busy: boolean) => void;
 }) {
   const [uploading, setUploading] = useState(false);
 
   const handleFile = async (file: File | undefined) => {
     if (!file) return;
     setUploading(true);
-    const url = await uploadImageToSupabase(file, bucket);
-    if (url) onChange(url);
-    setUploading(false);
+    onUploading?.(true);
+    try {
+      const url = await uploadImageToSupabase(file, bucket);
+      if (url) onChange(url);
+    } finally {
+      setUploading(false);
+      onUploading?.(false);
+    }
   };
 
   return (
@@ -596,6 +639,20 @@ function ImageUploadField({
    FORM COMPONENTS
    =================================================================== */
 
+/** Prevents double-submit and saving while an image is still uploading. */
+function useSubmit<F>(form: F, onSave: (form: F) => Promise<void>) {
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(0);
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (saving || uploading > 0) return;
+    setSaving(true);
+    try { await onSave(form); } finally { setSaving(false); }
+  };
+  const onUploading = (busy: boolean) => setUploading(n => n + (busy ? 1 : -1));
+  return { onSubmit, saving, busy: saving || uploading > 0, onUploading };
+}
+
 function EventForm({
   initial, onSave, onCancel,
 }: {
@@ -604,29 +661,35 @@ function EventForm({
   onCancel: () => void;
 }) {
   const [form, setForm] = useState<Omit<Event, "id" | "created_at">>({
-    status: initial.status ?? "",
+    // New events get the "New" badge by default
+    status: initial.id ? (initial.status ?? "") : "New",
     name_th: initial.name_th ?? "",
     name_en: initial.name_en ?? "",
     link: initial.link ?? "",
     text_th: initial.text_th ?? "",
     text_en: initial.text_en ?? "",
     image: initial.image ?? "",
-    year: initial.year ?? "",
+    year: initial.year ?? (initial.id ? "" : PUBLIC_EVENT_YEAR),
   });
   const set = (k: keyof typeof form, v: string) => setForm(f => ({ ...f, [k]: v }));
+  const submit = useSubmit(form, onSave);
 
   return (
-    <form onSubmit={e => { e.preventDefault(); onSave(form); }} className="p-8 space-y-6">
+    <form onSubmit={submit.onSubmit} className="p-8 space-y-6">
       <div className="grid grid-cols-2 gap-6">
-        <Field label="Status">
+        <Field label="Badge (ป้ายบนการ์ด)">
           <select value={form.status ?? ""} onChange={e => set("status", e.target.value)} className={inputCls}>
-            <option value="Active">Active</option>
-            <option value="Upcoming">Upcoming</option>
-            <option value="Past">Past</option>
+            <option value="New">New</option>
+            <option value="">— ไม่มีป้าย —</option>
+            {/* Keep any legacy value so opening the form doesn't silently change it */}
+            {form.status && form.status !== "New" && <option value={form.status}>{form.status}</option>}
           </select>
         </Field>
         <Field label="Year">
-          <input type="text" value={form.year} onChange={e => set("year", e.target.value)} className={inputCls} placeholder="2025" required />
+          <input type="text" value={form.year} onChange={e => set("year", e.target.value)} className={inputCls} placeholder={PUBLIC_EVENT_YEAR} required />
+          {form.year.trim() !== PUBLIC_EVENT_YEAR && (
+            <p className="text-xs text-amber-600 mt-1">หน้าเว็บแสดงเฉพาะ event ที่ Year เป็น “{PUBLIC_EVENT_YEAR}” เท่านั้น</p>
+          )}
         </Field>
       </div>
       <div className="grid grid-cols-2 gap-6">
@@ -642,9 +705,10 @@ function EventForm({
         value={form.image ?? ""}
         onChange={url => set("image", url)}
         bucket="events-images"
+        onUploading={submit.onUploading}
       />
-      <Field label="Registration Link">
-        <input type="text" value={form.link ?? ""} onChange={e => set("link", e.target.value)} className={inputCls} />
+      <Field label="Post / Registration Link">
+        <input type="url" value={form.link ?? ""} onChange={e => set("link", e.target.value)} className={inputCls} placeholder="https://www.instagram.com/p/..." />
       </Field>
       <div className="grid grid-cols-2 gap-6">
         <Field label="Text (EN)">
@@ -654,7 +718,7 @@ function EventForm({
           <textarea value={form.text_th ?? ""} onChange={e => set("text_th", e.target.value)} className={`${inputCls} h-32`} />
         </Field>
       </div>
-      <FormFooter onCancel={onCancel} saveLabel="Save Event" />
+      <FormFooter onCancel={onCancel} saveLabel="Save Event" busy={submit.busy} saving={submit.saving} />
     </form>
   );
 }
@@ -674,30 +738,32 @@ function ContentForm({
     author: initial.author ?? "",
   });
   const set = (k: keyof typeof form, v: string) => setForm(f => ({ ...f, [k]: v }));
+  const submit = useSubmit(form, onSave);
 
   return (
-    <form onSubmit={e => { e.preventDefault(); onSave(form); }} className="p-8 space-y-6">
+    <form onSubmit={submit.onSubmit} className="p-8 space-y-6">
       <Field label="Headline">
         <input type="text" value={form.head} onChange={e => set("head", e.target.value)} className={inputCls} required />
       </Field>
-      <div className="grid grid-cols-2 gap-6">
-        <Field label="Author">
-          <input type="text" value={form.author ?? ""} onChange={e => set("author", e.target.value)} className={inputCls} />
-        </Field>
-      </div>
       <ImageUploadField
         label="Main Image"
         value={form.img_head ?? ""}
         onChange={url => set("img_head", url)}
         bucket="contents-images"
+        onUploading={submit.onUploading}
       />
-      <Field label="Short Detail (Teaser)">
+      {/* Column names are historical: on /article, `detail` is the bold subheading,
+          `author` is the body text and `word` is the "Read More" link. */}
+      <Field label="Subheading (ข้อความตัวหนาใต้หัวข้อ)">
         <textarea value={form.detail ?? ""} onChange={e => set("detail", e.target.value)} className={`${inputCls} h-20`} />
       </Field>
-      <Field label="Full Content (Markdown or Text)">
-        <textarea value={form.word ?? ""} onChange={e => set("word", e.target.value)} className={`${inputCls} h-64`} />
+      <Field label="Description (เนื้อหาย่อ)">
+        <textarea value={form.author ?? ""} onChange={e => set("author", e.target.value)} className={`${inputCls} h-40`} />
       </Field>
-      <FormFooter onCancel={onCancel} saveLabel="Save Article" />
+      <Field label="Read More Link">
+        <input type="url" value={form.word ?? ""} onChange={e => set("word", e.target.value)} className={inputCls} placeholder="https://www.instagram.com/p/..." />
+      </Field>
+      <FormFooter onCancel={onCancel} saveLabel="Save Article" busy={submit.busy} saving={submit.saving} />
     </form>
   );
 }
@@ -719,9 +785,10 @@ function TeamForm({
     order_num: initial.order_num ?? 1,
   });
   const set = (k: keyof typeof form, v: any) => setForm(f => ({ ...f, [k]: v }));
+  const submit = useSubmit(form, onSave);
 
   return (
-    <form onSubmit={e => { e.preventDefault(); onSave(form); }} className="p-8 space-y-6">
+    <form onSubmit={submit.onSubmit} className="p-8 space-y-6">
       <div className="grid grid-cols-2 gap-6">
         <Field label="Name (EN)">
           <input type="text" value={form.name_en} onChange={e => set("name_en", e.target.value)} className={inputCls} required />
@@ -750,7 +817,7 @@ function TeamForm({
       <Field label="Link">
         <input type="text" value={form.link} onChange={e => set("link", e.target.value)} className={inputCls} />
       </Field>
-      <FormFooter onCancel={onCancel} saveLabel="Save Team" />
+      <FormFooter onCancel={onCancel} saveLabel="Save Team" busy={submit.busy} saving={submit.saving} />
     </form>
   );
 }
@@ -765,11 +832,13 @@ function PartnerForm({
   const [form, setForm] = useState<Omit<Partner, "id" | "created_at">>({
     name: initial.name ?? "",
     logo_url: initial.logo_url ?? "",
+    link: initial.link ?? "",
   });
   const set = (k: keyof typeof form, v: string) => setForm(f => ({ ...f, [k]: v }));
+  const submit = useSubmit(form, onSave);
 
   return (
-    <form onSubmit={e => { e.preventDefault(); onSave(form); }} className="p-8 space-y-6">
+    <form onSubmit={submit.onSubmit} className="p-8 space-y-6">
       <Field label="Partner Name">
         <input type="text" value={form.name} onChange={e => set("name", e.target.value)} className={inputCls} required />
       </Field>
@@ -778,8 +847,12 @@ function PartnerForm({
         value={form.logo_url}
         onChange={url => set("logo_url", url)}
         bucket="partner-logos"
+        onUploading={submit.onUploading}
       />
-      <FormFooter onCancel={onCancel} saveLabel="Save Partner" />
+      <Field label="Website Link">
+        <input type="url" value={form.link ?? ""} onChange={e => set("link", e.target.value)} className={inputCls} placeholder="https://" />
+      </Field>
+      <FormFooter onCancel={onCancel} saveLabel="Save Partner" busy={submit.busy} saving={submit.saving} />
     </form>
   );
 }
