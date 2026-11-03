@@ -59,6 +59,9 @@ type Partner = {
 
 type ActiveTab = "events" | "articles" | "teams" | "partners";
 
+/** The public site (NewEvent.tsx / Event.tsx) only fetches events with this exact year. */
+const PUBLIC_EVENT_YEAR = "2025 - 2026";
+
 /* ---------- IMAGE UPLOAD FIELDS ---------- */
 const CONTENT_IMAGE_FIELDS = ["img_head"];
 const EVENT_IMAGE_FIELDS = ["image"];
@@ -108,13 +111,14 @@ export default function Dashboard() {
   /* ---------- FETCH DATA ---------- */
   useEffect(() => {
     if (!user) return;
-    const load = async <T,>(table: string, orderCol: string, setter: (rows: T[]) => void) => {
-      const { data, error } = await supabase.from(table).select("*").order(orderCol, { ascending: true });
+    const load = async <T,>(table: string, orderCol: string, setter: (rows: T[]) => void, ascending = true) => {
+      const { data, error } = await supabase.from(table).select("*").order(orderCol, { ascending });
       if (error) alert(`โหลดข้อมูล ${table} ไม่สำเร็จ: ${error.message}`);
       else if (data) setter(data as T[]);
     };
-    load<Content>("contents", "id", setContents);
-    load<Event>("events", "id", setEvents);
+    // Same order as the public site: newest first
+    load<Content>("contents", "created_at", setContents, false);
+    load<Event>("events", "id", setEvents, false);
     load<Team>("teams", "order_num", setTeams);
     load<Partner>("partners", "id", setPartners);
   }, [user]);
@@ -154,8 +158,10 @@ export default function Dashboard() {
   };
 
   /** Replace-or-append a saved row in local state. */
-  const upsertLocal = <T extends { id: number }>(list: T[], row: T) =>
-    list.some(i => i.id === row.id) ? list.map(i => (i.id === row.id ? row : i)) : [...list, row];
+  const upsertLocal = <T extends { id: number }>(list: T[], row: T, prepend = false) =>
+    list.some(i => i.id === row.id)
+      ? list.map(i => (i.id === row.id ? row : i))
+      : prepend ? [row, ...list] : [...list, row];
 
   const byOrder = (a: Team, b: Team) => a.order_num - b.order_num || a.id - b.id;
 
@@ -165,7 +171,7 @@ export default function Dashboard() {
     if (!form.head.trim()) { alert("Headline is required"); return; }
     const row = await saveRow<Content>("contents", editingContent?.id, form);
     if (!row) return;
-    setContents(prev => upsertLocal(prev, row));
+    setContents(prev => upsertLocal(prev, row, true));
     setEditingContent(null);
   };
 
@@ -180,7 +186,7 @@ export default function Dashboard() {
     if (!form.name_en.trim() || !form.year.trim()) { alert("Required fields missing"); return; }
     const row = await saveRow<Event>("events", editingEvent?.id, form);
     if (!row) return;
-    setEvents(prev => upsertLocal(prev, row));
+    setEvents(prev => upsertLocal(prev, row, true));
     setEditingEvent(null);
   };
 
@@ -323,8 +329,12 @@ export default function Dashboard() {
                     image={event.image}
                     icon={<Calendar size={32} />}
                     badge={event.status}
-                    badgeColor={event.status === "Active" ? "green" : "amber"}
-                    meta={event.year}
+                    badgeColor={event.status === "New" ? "green" : "amber"}
+                    meta={
+                      event.year !== PUBLIC_EVENT_YEAR ? `${event.year} · ไม่แสดงบนเว็บ (ปีไม่ตรง ${PUBLIC_EVENT_YEAR})`
+                      : !event.status ? `${event.year} · ซ่อนอยู่ (ไม่มี Status)`
+                      : event.year
+                    }
                     title={event.name_en}
                     subtitle={event.text_en ?? ""}
                     onEdit={() => setEditingEvent(event)}
@@ -343,9 +353,9 @@ export default function Dashboard() {
                     key={article.id}
                     image={article.img_head}
                     icon={<FileText size={32} />}
-                    meta={article.author ?? ""}
+                    meta={new Date(article.created_at).toLocaleDateString()}
                     title={article.head}
-                    subtitle={article.detail ?? ""}
+                    subtitle={article.detail || article.author || ""}
                     onEdit={() => setEditingContent(article)}
                     onDelete={() => deleteContent(article.id)}
                   />
@@ -652,14 +662,15 @@ function EventForm({
   onCancel: () => void;
 }) {
   const [form, setForm] = useState<Omit<Event, "id" | "created_at">>({
-    status: initial.status ?? "",
+    // New events default to "New" so they show up on the homepage
+    status: initial.id ? (initial.status ?? "") : "New",
     name_th: initial.name_th ?? "",
     name_en: initial.name_en ?? "",
     link: initial.link ?? "",
     text_th: initial.text_th ?? "",
     text_en: initial.text_en ?? "",
     image: initial.image ?? "",
-    year: initial.year ?? "",
+    year: initial.year ?? (initial.id ? "" : PUBLIC_EVENT_YEAR),
   });
   const set = (k: keyof typeof form, v: string) => setForm(f => ({ ...f, [k]: v }));
   const submit = useSubmit(form, onSave);
@@ -669,14 +680,17 @@ function EventForm({
       <div className="grid grid-cols-2 gap-6">
         <Field label="Status">
           <select value={form.status ?? ""} onChange={e => set("status", e.target.value)} className={inputCls}>
-            <option value="">— None —</option>
-            <option value="Active">Active</option>
-            <option value="Upcoming">Upcoming</option>
-            <option value="Past">Past</option>
+            <option value="New">New (แสดงบนเว็บ)</option>
+            <option value="">— ไม่มี — (ซ่อน ไม่แสดงบนเว็บ)</option>
+            {/* Keep any legacy value so opening the form doesn't silently change it */}
+            {form.status && form.status !== "New" && <option value={form.status}>{form.status}</option>}
           </select>
         </Field>
         <Field label="Year">
-          <input type="text" value={form.year} onChange={e => set("year", e.target.value)} className={inputCls} placeholder="2025 - 2026" required />
+          <input type="text" value={form.year} onChange={e => set("year", e.target.value)} className={inputCls} placeholder={PUBLIC_EVENT_YEAR} required />
+          {form.year.trim() !== PUBLIC_EVENT_YEAR && (
+            <p className="text-xs text-amber-600 mt-1">หน้าเว็บแสดงเฉพาะ event ที่ Year เป็น “{PUBLIC_EVENT_YEAR}” เท่านั้น</p>
+          )}
         </Field>
       </div>
       <div className="grid grid-cols-2 gap-6">
@@ -694,8 +708,8 @@ function EventForm({
         bucket="events-images"
         onUploading={submit.onUploading}
       />
-      <Field label="Registration Link">
-        <input type="text" value={form.link ?? ""} onChange={e => set("link", e.target.value)} className={inputCls} />
+      <Field label="Post / Registration Link">
+        <input type="url" value={form.link ?? ""} onChange={e => set("link", e.target.value)} className={inputCls} placeholder="https://www.instagram.com/p/..." />
       </Field>
       <div className="grid grid-cols-2 gap-6">
         <Field label="Text (EN)">
@@ -732,11 +746,6 @@ function ContentForm({
       <Field label="Headline">
         <input type="text" value={form.head} onChange={e => set("head", e.target.value)} className={inputCls} required />
       </Field>
-      <div className="grid grid-cols-2 gap-6">
-        <Field label="Author">
-          <input type="text" value={form.author ?? ""} onChange={e => set("author", e.target.value)} className={inputCls} />
-        </Field>
-      </div>
       <ImageUploadField
         label="Main Image"
         value={form.img_head ?? ""}
@@ -744,11 +753,16 @@ function ContentForm({
         bucket="contents-images"
         onUploading={submit.onUploading}
       />
-      <Field label="Short Detail (Teaser)">
+      {/* Column names are historical: on /article, `detail` is the bold subheading,
+          `author` is the body text and `word` is the "Read More" link. */}
+      <Field label="Subheading (ข้อความตัวหนาใต้หัวข้อ)">
         <textarea value={form.detail ?? ""} onChange={e => set("detail", e.target.value)} className={`${inputCls} h-20`} />
       </Field>
-      <Field label="Full Content (Markdown or Text)">
-        <textarea value={form.word ?? ""} onChange={e => set("word", e.target.value)} className={`${inputCls} h-64`} />
+      <Field label="Description (เนื้อหาย่อ)">
+        <textarea value={form.author ?? ""} onChange={e => set("author", e.target.value)} className={`${inputCls} h-40`} />
+      </Field>
+      <Field label="Read More Link">
+        <input type="url" value={form.word ?? ""} onChange={e => set("word", e.target.value)} className={inputCls} placeholder="https://www.instagram.com/p/..." />
       </Field>
       <FormFooter onCancel={onCancel} saveLabel="Save Article" busy={submit.busy} saving={submit.saving} />
     </form>
