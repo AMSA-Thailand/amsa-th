@@ -29,6 +29,9 @@ const translations = {
 };
 
 // TypeScript interface ของ row events
+/** Only the N most recent events get the "New" badge (homepage and /event alike). */
+const NEW_BADGE_COUNT = 6;
+
 interface EventItem {
   id: number;
   status: string;
@@ -127,14 +130,15 @@ export default function Event() {
         </div> */}
         <div className="bg-white px-10 pb-20 grid max-sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {/* Homepage: latest 6 events. /event: all events. */}
-          {(isEventPage ? events : events.slice(0, 6)).map((item) => {
+          {(isEventPage ? events : events.slice(0, 6)).map((item, index) => {
             const name = lang === "th" ? item.name_th : item.name_en;
             const text = lang === "th" ? item.text_th : item.text_en;
 
             return (
               <EventCard
                 key={item.id}
-                status={item.status}
+                // events are sorted newest first, so the first N are the latest
+                status={index < NEW_BADGE_COUNT ? "New" : ""}
                 name={name}
                 link={item.link}
                 text={text}

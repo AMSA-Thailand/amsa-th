@@ -61,6 +61,8 @@ type ActiveTab = "events" | "articles" | "teams" | "partners";
 
 /** The public site (NewEvent.tsx / Event.tsx) only fetches events with this exact year. */
 const PUBLIC_EVENT_YEAR = "2025 - 2026";
+/** Matches NEW_BADGE_COUNT in NewEvent.tsx: the latest N public events get a "New" badge. */
+const NEW_BADGE_COUNT = 6;
 
 /* ---------- IMAGE UPLOAD FIELDS ---------- */
 const CONTENT_IMAGE_FIELDS = ["img_head"];
@@ -321,15 +323,20 @@ export default function Dashboard() {
             </div>
 
             {/* ── Events Tab ── */}
-            {activeTab === "events" && (
+            {activeTab === "events" && (() => {
+              // Same rule as the public site: newest N events with the public year
+              const newIds = new Set(
+                events.filter(e => e.year === PUBLIC_EVENT_YEAR).slice(0, NEW_BADGE_COUNT).map(e => e.id),
+              );
+              return (
               <div className="grid grid-cols-1 gap-6">
                 {events.map(event => (
                   <ItemCard
                     key={event.id}
                     image={event.image}
                     icon={<Calendar size={32} />}
-                    badge={event.status}
-                    badgeColor={event.status === "New" ? "green" : "amber"}
+                    badge={newIds.has(event.id) ? "New" : null}
+                    badgeColor="green"
                     meta={
                       event.year !== PUBLIC_EVENT_YEAR ? `${event.year} · ไม่แสดงบนเว็บ (ปีไม่ตรง ${PUBLIC_EVENT_YEAR})`
                       : event.year
@@ -342,7 +349,8 @@ export default function Dashboard() {
                 ))}
                 {events.length === 0 && <EmptyState label="events" />}
               </div>
-            )}
+              );
+            })()}
 
             {/* ── Articles Tab ── */}
             {activeTab === "articles" && (
@@ -661,8 +669,8 @@ function EventForm({
   onCancel: () => void;
 }) {
   const [form, setForm] = useState<Omit<Event, "id" | "created_at">>({
-    // New events get the "New" badge by default
-    status: initial.id ? (initial.status ?? "") : "New",
+    // No longer edited: the "New" badge is computed from recency. Keep the stored value as-is.
+    status: initial.status ?? null,
     name_th: initial.name_th ?? "",
     name_en: initial.name_en ?? "",
     link: initial.link ?? "",
@@ -676,15 +684,10 @@ function EventForm({
 
   return (
     <form onSubmit={submit.onSubmit} className="p-8 space-y-6">
+      <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-xl p-3">
+        ป้าย <b>New</b> จะขึ้นอัตโนมัติกับ {NEW_BADGE_COUNT} event ล่าสุด ไม่ต้องตั้งเอง
+      </p>
       <div className="grid grid-cols-2 gap-6">
-        <Field label="Badge (ป้ายบนการ์ด)">
-          <select value={form.status ?? ""} onChange={e => set("status", e.target.value)} className={inputCls}>
-            <option value="New">New</option>
-            <option value="">— ไม่มีป้าย —</option>
-            {/* Keep any legacy value so opening the form doesn't silently change it */}
-            {form.status && form.status !== "New" && <option value={form.status}>{form.status}</option>}
-          </select>
-        </Field>
         <Field label="Year">
           <input type="text" value={form.year} onChange={e => set("year", e.target.value)} className={inputCls} placeholder={PUBLIC_EVENT_YEAR} required />
           {form.year.trim() !== PUBLIC_EVENT_YEAR && (
